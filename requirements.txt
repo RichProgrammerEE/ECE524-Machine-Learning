@@ -1,6 +1,7 @@
 matplotlib
 numpy
 scipy
-numba # python < 3.11
+# numba # python < 3.11
 autopep8
 pylint
+sympy
