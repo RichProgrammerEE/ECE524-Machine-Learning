@@ -1,5 +1,7 @@
 import sys
+import os
 import math
+import pathlib
 import argparse
 
 import numpy as np
@@ -7,6 +9,10 @@ import numpy as np
 # mpl text: https://matplotlib.org/stable/tutorials/text/mathtext.html#symbols
 import matplotlib.pyplot as plt
 import scipy.stats as ss
+
+
+def image_dir() -> pathlib.Path:
+    return pathlib.Path("images") / "problem1"
 
 
 def gaussian(x: np.array, mu: float, sigma: float):
@@ -34,6 +40,8 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--show', action='store_true', help="Show plots")
     args = parser.parse_args()
 
+    os.makedirs(image_dir(), exist_ok=True)
+
     try:
         ######################### PART A #########################
         x = np.linspace(-3, 3, 1000)
@@ -50,7 +58,7 @@ if __name__ == "__main__":
         plt.grid(visible=True)
         if args.show:
             plt.show()
-        fig.savefig(f"hw1_p1_a.png")
+        fig.savefig(image_dir() / "hw1_p1_a.svg")
         plt.close()
 
         ######################### PART B #########################
@@ -60,25 +68,7 @@ if __name__ == "__main__":
         data = np.random.default_rng().normal(loc=mu, scale=sigma, size=1000)
 
         # ii
-        # fig = plt.figure()
-        # plt.hist(data, bins=4, density=True)
-        # plt.title(rf"$\mathcal{{N}}$({mu}, {sigma}) histogram: 4 bins")
-        # plt.ylabel("f(x)")
-        # plt.xlabel("x")
-        # plt.grid(visible=True)
-        # if args.show:
-        #     plt.show()
-        # fig.savefig(f"hw1_p1_bii_1.png")
-
-        # fig = plt.figure()
-        # plt.hist(data, bins=1000, density=True)
-        # plt.title(rf"$\mathcal{{N}}$({mu}, {sigma}) histogram: 1000 bins")
-        # plt.ylabel("f(x)")
-        # plt.xlabel("x")
-        # plt.grid(visible=True)
-        # if args.show:
-        #     plt.show()
-        # fig.savefig(f"hw1_p1_bii_2.png")
+        # Figures plotted here are same as in part iv
 
         # iii
         fitted_mu, fitted_sigma = ss.norm.fit(data)
@@ -100,7 +90,7 @@ if __name__ == "__main__":
         plt.grid(visible=True)
         if args.show:
             plt.show()
-        fig.savefig(f"hw1_p1_biv_1.png")
+        fig.savefig(image_dir() / "hw1_p1_b_iv_1.svg")
         plt.close()
 
         fig = plt.figure()
@@ -113,7 +103,7 @@ if __name__ == "__main__":
         plt.grid(visible=True)
         if args.show:
             plt.show()
-        fig.savefig(f"hw1_p1_biv_2.png")
+        fig.savefig(image_dir() / "hw1_p1_b_iv_2.svg")
         plt.close()
 
         ######################### PART C #########################
@@ -134,7 +124,7 @@ if __name__ == "__main__":
         plt.grid(visible=True)
         if args.show:
             plt.show()
-        fig.savefig(f"hw1_p1_ci.png")
+        fig.savefig(image_dir() / "hw1_p1_c_i.svg")
         plt.close()
 
         fig = plt.figure()
@@ -147,7 +137,7 @@ if __name__ == "__main__":
         plt.grid(visible=True)
         if args.show:
             plt.show()
-        fig.savefig(f"hw1_p1_cii.png")
+        fig.savefig(image_dir() / "hw1_p1_c_ii.svg")
         plt.close()
 
     except KeyboardInterrupt as keyerr:
