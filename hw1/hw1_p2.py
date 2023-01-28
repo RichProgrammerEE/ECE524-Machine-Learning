@@ -32,13 +32,13 @@ if __name__ == "__main__":
     os.makedirs(image_dir(), exist_ok=True)
 
     n = 100
-    X = np.linspace(-1, 5, n)
-    Y = np.linspace(0, 10, n)
+    X = np.linspace(-5, 5, n)
+    Y = np.linspace(-5, 5, n)
     XX, YY = np.meshgrid(X, Y)
-    mu = np.array([2, 6]).T
+    mu = np.array([0, 0]).T
     sigma = np.array([[2, 1], [1, 2]])
-    # result = bivariate_gaussian_fast(XX, YY, mu, sigma)
-    result = eval_hw_gaussian(XX, YY)
+    result = bivariate_gaussian_fast(XX, YY, mu, sigma)
+    # result = eval_hw_gaussian(XX, YY)
 
     fig = plt.figure()
 
@@ -94,3 +94,6 @@ if __name__ == "__main__":
     plt.grid(visible=True)
     fig.savefig(image_dir() / "hw1_p2_c_ii.svg")
     plt.show()
+
+    A = np.array([[-2, 1], [1, -2]])
+    print(np.matmul(A, A.T))

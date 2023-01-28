@@ -81,10 +81,10 @@ if __name__ == "__main__":
         y = rv.pdf(x)
 
         fig = plt.figure()
-        plt.hist(data, bins=4, density=True)
+        plt.hist(data, bins=15, density=True)
         plt.plot(x, y, 'k', linewidth=3)
         plt.title(
-            rf"$\mathcal{{N}}$({mu}, {sigma}) histogram: 4 bins + fitted")
+            rf"$\mathcal{{N}}$({mu}, {sigma}) histogram: 15 bins + fitted")
         plt.ylabel("f(x)")
         plt.xlabel("x")
         plt.grid(visible=True)
@@ -107,13 +107,22 @@ if __name__ == "__main__":
         plt.close()
 
         ######################### PART C #########################
-        j_hats = []
-        ms = range(1, 201)
-        for m in ms:
-            j_hats.append(cross_validation_estimator_of_risk(data, m))
+        m_vals = []
+        for i in range(50):
+            mu = 0
+            sigma = 1
+            data = np.random.default_rng().normal(loc=mu, scale=sigma, size=1000)
+            j_hats = []
+            ms = range(1, 201)
+            for m in ms:
+                j_hats.append(cross_validation_estimator_of_risk(data, m))
 
-        optimal_m = np.argmin(j_hats) + 1  # Indicies are zero-based
-        print(f"Optimal number of bins: {optimal_m}")
+            optimal_m = np.argmin(j_hats) + 1  # Indicies are zero-based
+            m_vals.append(optimal_m)
+            print(f"Optimal number of bins: {optimal_m}")
+
+        # print(m_vals)
+        print(sum(m_vals) / len(m_vals))
 
         fig = plt.figure()
         plt.plot(ms, j_hats, 'k', linewidth=3)

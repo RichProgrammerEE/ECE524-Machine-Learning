@@ -62,8 +62,10 @@ if __name__ == "__main__":
 
     ######################### PART D #########################
     # Add outliers to y
-    idx = [10, 16, 23, 37, 45]
-    y[idx] = 5
+    # idx = [10, 16, 23, 37, 45]
+    # y[idx] = 5
+    idx = [5, 6]
+    y[idx] = 3
 
     # Let numpy do the heavy lifting and calculate the least-squares solution
     theta = np.linalg.lstsq(A_leg, y, rcond=None)[0]
