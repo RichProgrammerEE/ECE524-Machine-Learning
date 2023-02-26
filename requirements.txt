@@ -1,7 +1,13 @@
 matplotlib
 numpy
+pandas
 scipy
+cvxpy
 # numba # python < 3.11
 autopep8
 pylint
 sympy
+
+jupyter
+jupyterlab
+ipykernel
