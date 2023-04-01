@@ -12,3 +12,5 @@ opencv-python
 jupyter
 jupyterlab
 ipykernel
+
+bayesian-optimization

@@ -2,3 +2,5 @@
 venv/
 **/*.png
 **/*.svg
+
+hw5/data/**
