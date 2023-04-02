@@ -2,5 +2,7 @@
 venv/
 **/*.png
 **/*.svg
+**/__pycache__
 
 hw5/data/**
+data/

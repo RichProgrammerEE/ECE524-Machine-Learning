@@ -14,3 +14,12 @@ jupyterlab
 ipykernel
 
 bayesian-optimization
+
+# HW5 Kaggle Competition
+timm
+Pillow
+torch
+torchsummary
+torchvision
+pydantic
+tdqm
