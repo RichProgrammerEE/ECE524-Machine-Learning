@@ -26,3 +26,5 @@ tdqm
 # Experimenting with existing bayesian optimization solution
 bayesian-optimization
 prettytable
+pymc
+seaborn
