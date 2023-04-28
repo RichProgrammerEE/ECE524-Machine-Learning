@@ -1,13 +1,22 @@
-import os
-import sys
+from enum import Enum
 from typing import Callable, List, Tuple
 
+import pymc as pm
 from scipy.stats import norm
 from scipy.optimize import minimize
-from sklearn.gaussian_process import GaussianProcessRegressor
-import pandas as pd
+import matplotlib.pyplot as plt
 import numpy as np
-from prettytable import PrettyTable
+
+
+class AcquisitionFunc(Enum):
+    EI = 0,  # Expected improvement
+    PI = 1,  # Probability of improvement
+    UCP = 2  # Upper confidence bound
+
+
+class OptimizerMode(Enum):
+    MCMC = 0,  # Markov Chain Monte-Carlo
+    OPT = 1,   # Maximum-a-posterior
 
 
 class BayesianOptimizer:
@@ -16,141 +25,184 @@ class BayesianOptimizer:
                  n_iter,
                  n_init,
                  bounds: List[Tuple[float, float]],
-                 scale,
-                 batch_size):
+                 acq_func=AcquisitionFunc.EI,
+                 mode=OptimizerMode.OPT,
+                 debug=False):
+        self.x = None
+        self.y = None
+        # The x-values that we actually evaluate the function at
+        self.x_eval = None
+        # The x-values that we use for initialization
         self.x_init = None
-        self.y_init = None
         self.objective_function = objective_function
+        # Number of iterations used for optimizing
         self.n_iter = n_iter
+        # Number of objective functions calls that will be made to initialize the model
         self.n_init = n_init
-        self.scale = scale
+        # Bounds on the parameter domain
         self.bounds = bounds
+        # Dimension/# of parameters we are optimizing over
         self.n_param = len(bounds)
-        self.batch_size = batch_size
-        self.gauss_pr = GaussianProcessRegressor()
-        self.best_samples_ = pd.DataFrame(columns=['x', 'y', 'ei'])
-        self.distances_ = []
+        # The acquisition function that will be used during the optimization process
+        self.acq_func = acq_func
+        # MCMC or OPT mode
+        self.mode = mode
+        # Debug mode
+        self.debug = debug
 
-        # Setup the table we are going to print out
-        self.table = PrettyTable()
-        self.table.float_format = ".3"
+        if self.n_init < 2:
+            raise ValueError("n_init must be greater than 2")
 
-    def _generate_random_input(self, num_samples):
+    def _generate_random_x(self):
         params = []
         for bound in self.bounds:
             param_init = np.random.uniform(
-                bound[0], bound[1], num_samples).reshape(num_samples, 1)
+                bound[0], bound[1], 1)
+            params.append(param_init)
+        return np.concatenate(params)
+
+    def _generate_init_input(self, num_samples):
+        params = []
+        for bound in self.bounds:
+            param_init = np.linspace(
+                bound[0], bound[1], num_samples).reshape(-1, 1)
             params.append(param_init)
         return np.concatenate(params, axis=1)
 
     def _init_prior(self):
         # First, we need to generate some random samples for each parameter
-        self.x_init = self._generate_random_input(self.n_init)
+        self.x = self._generate_init_input(self.n_init)
+        # Copy these to the init variable in case we want to reference them later
+        self.x_init = self.x
         # Now for each row of x, we evaluate the objective function
         costs = []
-        for row in self.x_init:
-            cost = self.objective_function(*row)
+        for i, row in enumerate(self.x):
+            cost = self._eval_objective_function(f"Init {i + 1}", row)
             costs.append(cost)
-        self.y_init = np.array(costs).reshape(self.n_init, 1)
+        self.y = np.array(costs)
 
-    def _init_table(self):
-        # Print the header
-        iter_col = [f"init {x + 1}" for x in range(self.n_init)]
-        self.table.add_column("N", iter_col)
-        self.table.add_column("COST", self.y_init[:, 0].tolist())
-        for i in range(self.n_param):
-            self.table.add_column(f"x{i}", self.x_init[:, i].tolist())
+    def _eval_objective_function(self, i_iter, x):
+        y = self.objective_function(*x)
+        print(f"Iter: {i_iter}, Value: {y}, x: {x}")
+        return y
 
-    def _expected_improvement(self, x_new):
-        # Using estimate from Gaussian surrogate instead of actual function for
-        # a new trial data point to avoid cost
-        mean_y_new, sigma_y_new = self.gauss_pr.predict(np.array([x_new]), return_std=True)
-        sigma_y_new = sigma_y_new.reshape(-1, 1)
-        if sigma_y_new == 0.0:
-            return 0.0
+    def _expected_improvement(self, mean, std):
+        f_best = self.y.min()
+        gamma = (f_best - mean) / std
+        return std * (gamma * norm.cdf(gamma) + norm.pdf(gamma))
 
-        # Using estimates from Gaussian surrogate instead of actual function for
-        # entire prior distribution to avoid cost
-        surrogate_mean = self.gauss_pr.predict(self.x_init)
-        max_surrogate_mean = np.max(surrogate_mean)
-        gamma = (mean_y_new - max_surrogate_mean) / sigma_y_new
-        eip = sigma_y_new * (gamma * norm.cdf(gamma) + norm.pdf(gamma))
-        # exp_imp = (mean_y_new - max_surrogate_mean) * norm.cdf(z) + sigma_y_new * norm.pdf(z)
+    def _probability_of_improvement(self, mean, std):
+        f_best = self.y.min()
+        gamma = (f_best - mean) / std
+        return norm.cdf(gamma)
 
-        return eip
+    def _acquisition_fn(self, gp: pm.gp.Marginal, point, x: np.array):
+        # Get the mean, var for the chosen x value
+        x = np.array(x).reshape(-1, 1)
+        mean_new, var_new = gp.predict(x, point=point, diag=True)
+        # Since we only predicted on point, there should only be one mean/std
+        # mean_new = mean_new[0]
+        # # Extract the standard deviation from the variance matrix
+        # sigma_new = np.sqrt(var_new[0])
+        sigma_new = np.sqrt(var_new)
 
-    def _acquisition_fn(self, x):
         # Negative sign because scipy.optimize.minimize needs to maximize this function
-        return -1 * self._expected_improvement(x)
+        if self.acq_func == AcquisitionFunc.EI:
+            result = self._expected_improvement(mean_new, sigma_new)
+        elif self.acq_func == AcquisitionFunc.PI:
+            result = self._probability_of_improvement(mean_new, sigma_new)
+        else:
+            raise NotImplementedError()
 
-    def _get_next_probable_point(self):
-        min_ei = float(sys.maxsize)
-        x_optimal = None
+        result = -1 * result
+        return result
 
-        # Trial with an array of random data points using BFGS algorithm
-        batch = self._generate_random_input(self.batch_size)
-        for x_start in batch:
-            response = minimize(fun=self._acquisition_fn, x0=x_start,
-                                bounds=self.bounds, method='L-BFGS-B')
-            if response.fun < min_ei:
-                min_ei = response.fun
-                x_optimal = response.x
-        return x_optimal, min_ei
+    def _get_next_probable_point(self, gp: pm.gp.Marginal, point):
+        # Define the acquisition function, there is a -1 because we wan't
+        # to maximize the function, not minimize
+        def acq_func(x): return self._acquisition_fn(gp, point, x)
 
-    def _extend_prior_with_posterior_data(self, x, y):
-        self.x_init = np.append(self.x_init,
-                                np.array(x).reshape(1, len(self.bounds)), axis=0)
-        self.y_init = np.append(self.y_init,
-                                np.array([y]).reshape(1, 1), axis=0)
+        if self.debug:
+            # Debug code (only tested on 1-D case)
+            _, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 6))
+            # Plot the samples
+            ax1.plot(self.x, self.y, "ok", ms=4, label="Data")
+            # Plot the posterior prediction means
+            x_vals = np.linspace(0, 1, 250).reshape(-1, 1)
+            mu, _ = gp.predict(x_vals, point=point, diag=True)
+            ax1.plot(x_vals, mu, "r", lw=2, label="Posterior Samples")
+            ax1.legend()
+            ax1.title.set_text("Model Fitting")
+            # Plot the acquisition function and its min
+            acq_vals = acq_func(x_vals)
+            ax2.plot(x_vals, acq_vals, label="Acquisition Function (*-1)")
+            mim_ind = np.argmin(acq_vals)
+            ax2.plot(x_vals[mim_ind], acq_vals[mim_ind], "go", label="True Min")
+            ax2.title.set_text(f"Acquisition Function: {self.acq_func}")
 
-    def _add_iteration_to_table(self, iter, x: np.array, y):
-        # Evaluate objective function, return the results and pretty print a summary
-        row = [iter]
-        row.append(y)
-        row.extend(x.tolist())
-        self.table.add_row(row)
+        # Select a random data point to begin our minimization on
+        n_rows = self.x.shape[0]
+        row = np.random.randint(0, n_rows-1)
+        x0 = self.x[row, :]
+        x0 = self._generate_random_x()
+        res = minimize(fun=acq_func, x0=x0, bounds=self.bounds)
 
-    def maximize(self):
+        if self.debug:
+            # Plot the point the minimizer found
+            ax2.plot(res.x, res.fun, "ko", label="Minimizer Min")
+            ax2.legend()
+            plt.subplots_adjust(hspace=0.5)
+            plt.show()
+
+        return res.x, res.fun
+
+    def _sample(self) -> np.array:
+        '''Sample the surrogate function to get the next x value'''
+        model = pm.Model()
+        with model:
+            # We use the ARD Matern 5/2 kernel here
+            ℓ = pm.Gamma("ℓ", alpha=1, beta=0.5)
+            # η = pm.HalfCauchy("η", beta=5)
+            η = pm.Gamma("η", 1, 1)
+            cov = pm.gp.cov.ExpQuad(1, ls=ℓ)
+            gp = pm.gp.Marginal(cov_func=cov)
+            σ = pm.HalfCauchy("σ", beta=5)
+            y_ = gp.marginal_likelihood("y", X=self.x, y=self.y, sigma=σ)
+
+            if self.mode == OptimizerMode.MCMC:
+                raise NotImplementedError()
+            elif self.mode == OptimizerMode.OPT:
+                mp = pm.find_MAP(progressbar=False)
+                return self._get_next_probable_point(gp, mp)
+
+    def minimize(self):
         # First call the initialization routine for the specified number of times
         self._init_prior()
-        # Initialize the pretty formatted table
-        self._init_table()
-        y_max_ind = np.argmax(self.y_init)
-        y_max = self.y_init[y_max_ind]
-        optimal_x = self.x_init[y_max_ind]
 
-        optimal_ei = None
+        y_min_ind = np.argmin(self.y)
+        optimal_y = self.y[y_min_ind]
+        optimal_x = self.x[y_min_ind, :]
+
         for i in range(self.n_iter):
+            x_next, _ = self._sample()
+            y_next = self._eval_objective_function(i + 1, x_next)
 
-            self.gauss_pr.fit(self.x_init, self.y_init)
+            if x_next in self.x:
+                raise RuntimeError("Evaluating same point")
+                continue
 
-            x_next, ei = self._get_next_probable_point()
-
-            y_next = self.objective_function(*x_next)
-
-            self._add_iteration_to_table(i + 1, x_next, y_next)
-
-            self._extend_prior_with_posterior_data(x_next, y_next)
-
-            if y_next > y_max:
-                y_max = y_next
-                optimal_x = x_next
-                optimal_ei = ei
-
-            if i == 0:
-                prev_x = x_next
+            # Extend our set of observations
+            self.x = np.vstack([self.x, x_next])
+            self.y = np.hstack([self.y, y_next])
+            if self.x_eval is not None:
+                self.x_eval = np.vstack([self.x_eval, x_next])
             else:
-                self.distances_.append(np.linalg.norm(prev_x - x_next))
-                prev_x = x_next
+                self.x_eval = np.array(x_next)
 
-            df = pd.DataFrame({"y": y_max, "ei": optimal_ei}, index=[0])
-            self.best_samples_ = pd.concat([self.best_samples_, df], ignore_index=True)
+            # Is this a new minimum?
+            if y_next < optimal_y:
+                optimal_y = y_next
+                optimal_x = x_next
 
-        self.optimal = (y_max, optimal_x)
-        return optimal_x, y_max
-
-    def print_results(self):
-        # Print the table we have constructed
-        print(self.table)
-        # Print the optimal values
-        print(f"Optimal COST: {self.optimal[0]}, PARAMS: {self.optimal[1]}")
+        print(f"Optimal COST: {optimal_y}, PARAMS: {optimal_x}")
+        return optimal_y, optimal_x
