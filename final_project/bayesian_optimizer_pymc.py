@@ -1,20 +1,18 @@
-import warnings
+import sys
 from enum import Enum
 from typing import Callable, List, Tuple
 
+import pymc as pm
 from scipy.stats import norm
 from scipy.optimize import minimize
 import matplotlib.pyplot as plt
 import numpy as np
 
-import sklearn.gaussian_process as gp
-from sklearn.gaussian_process import GaussianProcessRegressor
-
 
 class AcquisitionFunc(Enum):
     EI = 0,  # Expected improvement
     PI = 1,  # Probability of improvement
-    UCB = 2  # Upper confidence bound
+    UCP = 2  # Upper confidence bound
 
 
 class OptimizerMode(Enum):
@@ -43,10 +41,7 @@ class BayesianOptimizer:
         # Number of objective functions calls that will be made to initialize the model
         self.n_init = n_init
         # Bounds on the parameter domain
-        self.bounds = np.array(
-            bounds,
-            dtype=float
-        )
+        self.bounds = bounds
         # Dimension/# of parameters we are optimizing over
         self.dims = len(bounds)
         # The acquisition function that will be used during the optimization process
@@ -56,8 +51,16 @@ class BayesianOptimizer:
         # Debug mode
         self.debug = debug
 
-        # if self.n_init < 2:
-        #     raise ValueError("n_init must be greater than 2")
+        if self.n_init < 2:
+            raise ValueError("n_init must be greater than 2")
+
+    def _generate_random_x(self):
+        params = []
+        for bound in self.bounds:
+            param_init = np.random.uniform(
+                bound[0], bound[1], 1)
+            params.append(param_init)
+        return np.concatenate(params)
 
     def _generate_init_input(self, num_samples):
         params = []
@@ -84,77 +87,38 @@ class BayesianOptimizer:
         print(f"Iter: {i_iter}, Value: {y}, x: {x}")
         return y
 
-    def _expected_improvement(self, mean, std, f_best, xi=0.0):
-        num = (mean - f_best - xi)
-        gamma = num / std
-        return num * norm.cdf(gamma) + std * norm.pdf(gamma)
+    def _expected_improvement(self, mean, std):
+        f_best = self.y.min()
+        gamma = (f_best - mean) / std
+        return std * (gamma * norm.cdf(gamma) + norm.pdf(gamma))
 
-    def _probability_of_improvement(self, mean, std, f_best, xi=0.0):
-        return norm.cdf((mean - f_best - xi) / std)
+    def _probability_of_improvement(self, mean, std):
+        f_best = self.y.min()
+        gamma = (mean - f_best) / std
+        return norm.cdf(gamma)
 
-    def _upper_confidence_bound(self, mean, std, kappa=2.5):
-        return mean + kappa * std
-
-    def _acquisition_fn(self, model: GaussianProcessRegressor, x: np.array):
+    def _acquisition_fn(self, gp: pm.gp.Marginal, point, x: np.array):
         # Get the mean, var for the chosen x value
         x = np.array(x).reshape(-1, self.dims)
-        mean_new, std_new = model.predict(x, return_std=True)
-        mean_new = mean_new.reshape(x.shape[0], -1)
-        std_new = std_new.reshape(x.shape[0], -1)
+        mean_new, var_new = gp.predict(x, point=point, diag=True)
+        sigma_new = np.sqrt(var_new)
 
         # Negative sign because scipy.optimize.minimize needs to maximize this function
-        f_best = self.y.max()
         if self.acq_func == AcquisitionFunc.EI:
-            return self._expected_improvement(mean_new, std_new, f_best)
+            result = self._expected_improvement(mean_new, sigma_new)
         elif self.acq_func == AcquisitionFunc.PI:
-            return self._probability_of_improvement(mean_new, std_new, f_best)
-        elif self.acq_func == AcquisitionFunc.UCB:
-            return self._upper_confidence_bound(mean_new, std_new)
+            result = self._probability_of_improvement(mean_new, sigma_new)
         else:
             raise NotImplementedError()
 
-    def _maximize_acquisition_fn(self, model, bounds, n_warmup, n_iter):
-        '''Special handling to maximize the acquisition function'''
-        # Just do a warmup with some random sampling
-        x_tries = np.random.uniform(self.bounds[:, 0], bounds[:, 1],
-                                    size=(n_warmup, bounds.shape[0]))
-        ys = self._acquisition_fn(model, x_tries)
-        x_max = x_tries[ys.argmax()]
-        max_acq = ys.max()
+        # result = -1 * result
+        print("ACQ FUNC: ", x, result)
+        return result
 
-        # Seed the minimizer with more throughly spaced points
-        x_seeds = np.random.uniform(bounds[:, 0], bounds[:, 1],
-                                    size=(n_iter, bounds.shape[0]))
-
-        # Define the function we want to minimize
-        def min_acq_fn(x): return -1 * self._acquisition_fn(model, x)
-
-        # Invoke the minimizer
-        minimizer_x_tries = []
-        minimizer_vals = []
-        for x_try in x_seeds:
-            res = minimize(fun=min_acq_fn, x0=x_try,
-                           bounds=self.bounds, method="L-BFGS-B")
-
-            if not res.success:
-                continue
-
-            max_val = -np.squeeze(res.fun)
-            if max_val > max_acq:
-                x_max = res.x
-                max_acq = max_val
-
-            minimizer_x_tries.append(res.x)
-            minimizer_vals.append(-res.fun)
-
-        # Clip the value to make sure we are still in bounds
-        return np.clip(x_max, bounds[:, 0], bounds[:, 1]), max_acq, \
-            x_tries, ys, minimizer_x_tries, minimizer_vals
-
-    def _get_next_probable_point(self, model: GaussianProcessRegressor):
+    def _get_next_probable_point(self, gp: pm.gp.Marginal, point):
         # Define the acquisition function, there is a -1 because we wan't
         # to maximize the function, not minimize
-        def acq_func(x): return self._acquisition_fn(model, x)
+        def acq_func(x): return self._acquisition_fn(gp, point, x)
 
         if self.debug:
             # Debug code (only tested on 1-D case)
@@ -162,11 +126,9 @@ class BayesianOptimizer:
             # Plot the samples
             ax1.plot(self.x, self.y, "ok", ms=4, label="Data")
             # Plot the posterior prediction means
-            x_vals = np.linspace(self.bounds[0][0], self.bounds[0][1], 500).reshape(-1, self.dims)
-            mu, sd = model.predict(x_vals, return_std=True)
-            mu = mu.reshape(x_vals.shape).flatten()
-            sd = sd.reshape(x_vals.shape).flatten()
-
+            x_vals = np.linspace(self.bounds[0][0], self.bounds[0][1], 250).reshape(-1, self.dims)
+            mu, sd = gp.predict(x_vals, point=point, diag=True)
+            print(mu.shape, sd.shape)
             ax1.plot(x_vals, mu, "r", lw=2, label="Posterior Samples")
             ax1.plot(x_vals, mu + 2 * sd, "r", lw=1)
             ax1.plot(x_vals, mu - 2 * sd, "r", lw=1)
@@ -175,49 +137,70 @@ class BayesianOptimizer:
             ax1.title.set_text("Model Fitting")
             # Plot the acquisition function and its min
             acq_vals = acq_func(x_vals)
-            ax2.plot(x_vals, acq_vals, label="Acquisition Function")
-            mim_ind = np.argmax(acq_vals)
-            ax2.plot(x_vals[mim_ind], acq_vals[mim_ind], "bo", label="True Max")
+            ax2.plot(x_vals, acq_vals, label="Acquisition Function (*-1)")
+            mim_ind = np.argmin(acq_vals)
+            ax2.plot(x_vals[mim_ind], acq_vals[mim_ind], "go", label="True Min")
             ax2.title.set_text(f"Acquisition Function: {self.acq_func}")
-
-        res = self._maximize_acquisition_fn(model, self.bounds, 3000, 4)
-
-        if self.debug:
-            # Plot the point the minimizer found
-            ax2.plot(res[2], res[3], "go", ms=3, alpha=0.3, label="Maximize Warmup Tries")
-            ax2.plot(res[4], res[5], "ro", ms=3, alpha=0.6, label="Optimizer Tries")
-            ax2.plot(res[0], res[1], "ko", label="Calculated Max")
             ax2.legend()
             plt.subplots_adjust(hspace=0.5)
             plt.show()
 
-        return res[0], res[1]
+        print("HERE2")
+        # We will use a small batch size to do the minimization here
+        batch_size = 4
+        x0s = [self._generate_random_x() for i in range(batch_size)]
+        min_val = float(sys.maxsize)
+        x_optimal = None
+        for x0 in [0.25]:
+            res = minimize(fun=acq_func, x0=x0, bounds=self.bounds)
+            if res.fun < min_val:
+                min_val = res.fun
+                x_optimal = res.x
+
+        # if self.debug:
+        #     # Plot the point the minimizer found
+        #     ax2.plot(x_optimal, min_val, "ko", label="Minimizer Min")
+        #     ax2.legend()
+        #     plt.subplots_adjust(hspace=0.5)
+        #     plt.show()
+        #     print("HERE")
+
+        return x_optimal, min_val
 
     def _sample(self) -> np.array:
         '''Sample the surrogate function to get the next x value'''
-        # Ignore sklearn's GP warnings
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            model = GaussianProcessRegressor(
-                kernel=gp.kernels.Matern(nu=2.5),
-                alpha=1e-6,
-                normalize_y=True,
-                n_restarts_optimizer=10
-            )
-            model.fit(self.x, self.y)
-            return self._get_next_probable_point(model)
+        model = pm.Model()
+        with model:
+            # We use the ARD Matern 5/2 kernel here
+            ls = pm.Gamma("ls", alpha=7.5, beta=1)
+            # η = pm.HalfCauchy("η", beta=5)
+            # η = pm.Gamma("η", 1, 1)
+            cov = pm.gp.cov.Matern52(input_dim=self.dims, ls=ls)
+            gp = pm.gp.Marginal(cov_func=cov)
+            σ = pm.HalfCauchy("σ", beta=2.5)
+            y_ = gp.marginal_likelihood("y", X=self.x, y=self.y, sigma=σ)
 
-    def maximize(self):
+            if self.mode == OptimizerMode.MCMC:
+                raise NotImplementedError()
+            elif self.mode == OptimizerMode.OPT:
+                mp = pm.find_MAP(progressbar=False)
+                return self._get_next_probable_point(gp, mp)
+
+    def minimize(self):
         # First call the initialization routine for the specified number of times
         self._init_prior()
 
-        y_max_ind = np.argmax(self.y)
-        optimal_y = self.y[y_max_ind]
-        optimal_x = self.x[y_max_ind, :]
+        y_min_ind = np.argmin(self.y)
+        optimal_y = self.y[y_min_ind]
+        optimal_x = self.x[y_min_ind, :]
 
         for i in range(self.n_iter):
             x_next, _ = self._sample()
             y_next = self._eval_objective_function(i + 1, x_next)
+
+            # if x_next in self.x:
+            #     raise RuntimeError("Evaluating same point")
+            #     continue
 
             # Extend our set of observations
             self.x = np.vstack([self.x, x_next])
@@ -228,9 +211,9 @@ class BayesianOptimizer:
                 self.x_eval = np.array(x_next)
 
             # Is this a new minimum?
-            if y_next > optimal_y:
+            if y_next < optimal_y:
                 optimal_y = y_next
                 optimal_x = x_next
 
-        print(f"Optimal VALUE: {optimal_y}, PARAMS: {optimal_x}")
+        print(f"Optimal COST: {optimal_y}, PARAMS: {optimal_x}")
         return optimal_y, optimal_x

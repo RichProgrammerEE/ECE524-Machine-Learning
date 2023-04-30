@@ -1,1 +1,1 @@
-python -m jupyter nbconvert hw2_p1-4.ipynb --to pdf --output tmp-52715ZF7zkhDiWBQp.pdf --output-dir . --debug
+Only tested with Python version 3.10.9
