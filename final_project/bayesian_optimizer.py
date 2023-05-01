@@ -30,7 +30,8 @@ class BayesianOptimizer:
                  bounds: List[Tuple[float, float]],
                  acq_func=AcquisitionFunc.EI,
                  mode=OptimizerMode.OPT,
-                 debug=False):
+                 debug=False,
+                 verbose=True):
         self.x = None
         self.y = None
         # The x-values that we actually evaluate the function at
@@ -55,9 +56,8 @@ class BayesianOptimizer:
         self.mode = mode
         # Debug mode
         self.debug = debug
-
-        # if self.n_init < 2:
-        #     raise ValueError("n_init must be greater than 2")
+        # Verbose logging mode
+        self.verbose = verbose
 
     def _generate_init_input(self, num_samples):
         params = []
@@ -81,7 +81,8 @@ class BayesianOptimizer:
 
     def _eval_objective_function(self, i_iter, x):
         y = self.objective_function(*x)
-        print(f"Iter: {i_iter}, Value: {y}, x: {x}")
+        if self.verbose:
+            print(f"Iter: {i_iter}, Value: {y}, x: {x}")
         return y
 
     def _expected_improvement(self, mean, std, f_best, xi=0.0):
@@ -232,5 +233,6 @@ class BayesianOptimizer:
                 optimal_y = y_next
                 optimal_x = x_next
 
-        print(f"Optimal VALUE: {optimal_y}, PARAMS: {optimal_x}")
+        if self.verbose:
+            print(f"Optimal VALUE: {optimal_y}, PARAMS: {optimal_x}")
         return optimal_y, optimal_x
